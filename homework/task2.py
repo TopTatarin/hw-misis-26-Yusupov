@@ -22,16 +22,6 @@ def layernorm_forward_torch(
 
 # Автотюним только число варпов: BLOCK_SIZE жёстко задаётся снаружи как
 # next_power_of_2(N), чтобы вся строка гарантированно влезала в один блок
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-    ],
-    key=["N"],
-)
 @triton.jit
 def layernorm_forward_kernel(
         x_ptr, w_ptr, b_ptr, y_ptr,
@@ -71,16 +61,6 @@ def layernorm_forward_kernel(
     tl.store(y_ptr + row * stride_row + cols, y, mask=mask)
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-    ],
-    key=["N"],
-)
 @triton.jit
 def layernorm_backward_kernel(
         dy_ptr, x_ptr, w_ptr,
