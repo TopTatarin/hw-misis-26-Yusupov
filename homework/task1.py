@@ -15,7 +15,7 @@ def prepare_data() -> TensorDataset:
 def train():
     # pin_memory кладёт батчи в page-locked память, откуда копирование на GPU
     # можно делать асинхронно (non_blocking). num_workers готовит следующие батчи
-    # в фоне, чтобы GPU не простаивал в ожидании данных.
+    # в фоне, чтобы GPU не простаивал в ожидании данных
     dataloader = DataLoader(
         prepare_data(),
         batch_size=256,
@@ -39,7 +39,7 @@ def train():
 
     # CUDA-события — честный способ замерить время на GPU. Обычный time.time()
     # фиксирует лишь момент постановки ядра в очередь, а само вычисление идёт
-    # асинхронно, поэтому такие тайминги получаются заниженными и недостоверными.
+    # асинхронно, поэтому такие тайминги получаются заниженными и недостоверными
     fwd_start = torch.cuda.Event(enable_timing=True)
     fwd_end = torch.cuda.Event(enable_timing=True)
     bwd_start = torch.cuda.Event(enable_timing=True)
@@ -47,10 +47,10 @@ def train():
 
     for batch_idx, (data, target) in enumerate(dataloader):
         # Шум сразу генерируем на GPU, чтобы не создавать тензор на CPU
-        # и не гонять его лишний раз через шину PCIe.
+        # и не гонять его лишний раз через шину PCIe
         noise = torch.randn(data.shape, device='cuda')
         # non_blocking в паре с pin_memory позволяет копировать данные
-        # параллельно с вычислениями, а не блокировать поток на каждом батче.
+        # параллельно с вычислениями, а не блокировать поток на каждом батче
         data = data.to('cuda', non_blocking=True) + noise
         target = target.to('cuda', non_blocking=True)
 
@@ -67,19 +67,15 @@ def train():
         optimizer.step()
 
         # Дожидаемся, пока GPU реально досчитает все поставленные ядра,
-        # и только после этого снимаем тайминги (в миллисекундах).
+        # и только после этого снимаем тайминги
         torch.cuda.synchronize()
         forward_times.append(fwd_start.elapsed_time(fwd_end))
         backward_times.append(bwd_start.elapsed_time(bwd_end))
 
-        # .item() забирает из тензора обычный float и отвязывает его от графа.
-        # Если складывать в список сам тензор loss, вместе с ним в памяти
-        # остаётся весь граф вычислений каждого батча → утечка и неминуемый OOM.
+        # остаётся весь граф вычислений каждого батча → утечка и неминуемый OOM
         losses_history.append(loss.item())
         print(f"Batch {batch_idx} loss: {losses_history[-1]:.4f}")
-        # torch.cuda.empty_cache() из цикла убран: он принудительно синхронизирует
-        # поток и отдаёт кэш аллокатора, который тут же приходится выделять заново —
-        # это заметно замедляет обучение, а от утечек всё равно не спасает.
+        # torch.cuda.empty_cache() из цикла убран он принудительно синхронизирует поток, это заметно замедляет обучение, а от утечек всё равно не спасает
 
     print(f"Epoch finished, avg forward time is {statistics.mean(forward_times)}, "
           f"avg backward time is {statistics.mean(backward_times)}")
