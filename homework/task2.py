@@ -1,14 +1,3 @@
-"""ДЗ №2 — LayerNorm на Triton (forward + backward).
-
-Запуск:
-    python homework/task2.py            # проверка корректности
-    python homework/task2.py --bench    # + бенчмарк пропускной способности
-
-Раскладка данных: матрица [M, N], где N — hidden size. В гриде запускаемся
-по оси M (одна программа = одна строка), внутри программы видим все N сразу —
-так удобно считать среднее/дисперсию по строке за один проход.
-"""
-
 import argparse
 
 import torch
@@ -16,9 +5,6 @@ import triton
 import triton.language as tl
 
 
-# ----------------------------------------------------------------------------
-# Эталон на PyTorch (из условия) — нужен для проверки корректности.
-# ----------------------------------------------------------------------------
 def layernorm_forward_torch(
         x: torch.Tensor,
         weight: torch.Tensor,
@@ -34,9 +20,6 @@ def layernorm_forward_torch(
     return x_hat * weight + bias
 
 
-# ----------------------------------------------------------------------------
-# FORWARD KERNEL
-# ----------------------------------------------------------------------------
 # Автотюним только число варпов: BLOCK_SIZE жёстко задаётся снаружи как
 # next_power_of_2(N), чтобы вся строка гарантированно влезала в один блок.
 @triton.autotune(
@@ -54,7 +37,7 @@ def layernorm_forward_kernel(
         x_ptr, w_ptr, b_ptr, y_ptr,
         mean_ptr, rstd_ptr,  # сохраняем статистику строки для backward
 
-        stride_row,          # шаг между строками (в элементах)
+        stride_row,          # шаг между строками
         N: int,
         eps,
 
@@ -69,7 +52,6 @@ def layernorm_forward_kernel(
     # other=0 для замаскированного хвоста — не влияет на сумму
     x = tl.load(x_row_ptr + cols, mask=mask, other=0.0).to(tl.float32)
 
-    # Статистику считаем в fp32, даже если вход bf16/fp16 — иначе теряется точность.
     mean = tl.sum(x, axis=0) / N
     x_centered = tl.where(mask, x - mean, 0.0)
     var = tl.sum(x_centered * x_centered, axis=0) / N
@@ -89,15 +71,6 @@ def layernorm_forward_kernel(
     tl.store(y_ptr + row * stride_row + cols, y, mask=mask)
 
 
-# ----------------------------------------------------------------------------
-# BACKWARD KERNEL
-# ----------------------------------------------------------------------------
-# Формулы LayerNorm-backward для строки длины N:
-#   x_hat = (x - mean) * rstd
-#   wdy   = w * dy
-#   dx    = (wdy - mean(wdy) - x_hat * mean(x_hat * wdy)) * rstd
-#   dw   += dy * x_hat   (сумма по всем строкам)
-#   db   += dy           (сумма по всем строкам)
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=1),
@@ -147,10 +120,6 @@ def layernorm_backward_kernel(
     tl.atomic_add(dw_ptr + cols, dy * x_hat, mask=mask)
     tl.atomic_add(db_ptr + cols, dy, mask=mask)
 
-
-# ----------------------------------------------------------------------------
-# Python-обёртки + интеграция с autograd
-# ----------------------------------------------------------------------------
 class _LayerNormTriton(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, bias, eps):
@@ -208,27 +177,24 @@ def layernorm_triton(
     return _LayerNormTriton.apply(x, weight, bias, eps)
 
 
-# ----------------------------------------------------------------------------
-# Проверка корректности
-# ----------------------------------------------------------------------------
 def check_correctness():
     torch.manual_seed(0)
     device = "cuda"
 
-    # fp32: строгая проверка и forward, и backward.
+    # fp32 строгая проверка и forward, и backward.
     M, N = 1151, 8192  # неровные размеры специально, чтобы проверить маску
     x = torch.randn(M, N, device=device, dtype=torch.float32, requires_grad=True)
     weight = torch.randn(N, device=device, dtype=torch.float32, requires_grad=True)
     bias = torch.randn(N, device=device, dtype=torch.float32, requires_grad=True)
     dy = torch.randn(M, N, device=device, dtype=torch.float32)
 
-    # --- forward ---
+    #forward
     y_ref = torch.nn.functional.layer_norm(x, (N,), weight, bias, eps=1e-5)
     y_mine = layernorm_triton(x, weight, bias, eps=1e-5)
     torch.testing.assert_close(y_mine, y_ref)
     print("[ok] forward совпадает с torch.nn.functional.layer_norm")
 
-    # --- backward ---
+    #backward
     y_ref.backward(dy, retain_graph=True)
     dx_ref, dw_ref, db_ref = x.grad.clone(), weight.grad.clone(), bias.grad.clone()
 
@@ -242,9 +208,7 @@ def check_correctness():
     print("[ok] backward (dx, dweight, dbias) совпадает с autograd")
 
 
-# ----------------------------------------------------------------------------
 # Бенчмарк пропускной способности
-# ----------------------------------------------------------------------------
 def run_benchmark():
     def _torch_fwd(x, w, b):
         return torch.nn.functional.layer_norm(x, (x.shape[-1],), w, b, eps=1e-5)
