@@ -208,54 +208,9 @@ def check_correctness():
     print("[ok] backward (dx, dweight, dbias) совпадает с autograd")
 
 
-# Бенчмарк пропускной способности
-def run_benchmark():
-    def _torch_fwd(x, w, b):
-        return torch.nn.functional.layer_norm(x, (x.shape[-1],), w, b, eps=1e-5)
-
-    providers = {
-        "triton": layernorm_triton,
-        "torch-eager": _torch_fwd,
-        "torch-compile": torch.compile(_torch_fwd),
-    }
-
-    @triton.testing.perf_report([
-        triton.testing.Benchmark(
-            x_names=["N"],
-            x_vals=[512 * i for i in range(2, 33)],  # hidden size 1024..16384
-            line_arg="provider",
-            line_vals=list(providers.keys()),
-            line_names=list(providers.keys()),
-            styles=[("blue", "-"), ("red", "--"), ("green", "--")],
-            ylabel="GB/s",
-            plot_name="layernorm_forward_fp16",
-            args={"M": 4096},
-        )
-    ])
-    def benchmark(M, N, provider):
-        device, dtype = "cuda", torch.float16
-        x = torch.randn(M, N, device=device, dtype=dtype)
-        w = torch.randn(N, device=device, dtype=dtype)
-        b = torch.randn(N, device=device, dtype=dtype)
-
-        fn = lambda: providers[provider](x, w, b)
-        ms, min_ms, max_ms = triton.testing.do_bench(fn, quantiles=[0.5, 0.2, 0.8])
-
-        # forward читает x и пишет y -> ~2 * M * N элементов трафика.
-        def gbps(t):
-            total_bytes = 2 * M * N * x.element_size()
-            return (total_bytes * 1e-9) / (t * 1e-3)
-
-        return gbps(ms), gbps(max_ms), gbps(min_ms)
-
-    benchmark.run(save_path=None, show_plots=True, print_data=True)
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--bench", action="store_true", help="запустить бенчмарк")
     args = parser.parse_args()
 
     check_correctness()
-    if args.bench:
-        run_benchmark()
