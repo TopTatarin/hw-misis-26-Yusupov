@@ -21,7 +21,7 @@ def layernorm_forward_torch(
 
 
 # Автотюним только число варпов: BLOCK_SIZE жёстко задаётся снаружи как
-# next_power_of_2(N), чтобы вся строка гарантированно влезала в один блок.
+# next_power_of_2(N), чтобы вся строка гарантированно влезала в один блок
 @triton.autotune(
     configs=[
         triton.Config({}, num_warps=1),
@@ -108,7 +108,7 @@ def layernorm_backward_kernel(
     x_hat = tl.where(mask, (x - mean) * rstd, 0.0)
     wdy = tl.where(mask, w * dy, 0.0)
 
-    # Две редукции по строке: c1 и c2 — это нормировочные члены градиента входа.
+    # Две редукции по строке: c1 и c2 — это нормировочные члены градиента входа
     c1 = tl.sum(x_hat * wdy, axis=0) / N
     c2 = tl.sum(wdy, axis=0) / N
     dx = (wdy - x_hat * c1 - c2) * rstd
@@ -116,7 +116,7 @@ def layernorm_backward_kernel(
     tl.store(dx_ptr + row * stride_row + cols, dx, mask=mask)
 
     # dw и db суммируются по всем строкам M -> разные программы пишут в одни и те же
-    # ячейки [N]. atomic_add сериализует эти конкурентные записи без гонок.
+    # ячейки [N]. atomic_add сериализует эти конкурентные записи без гонок
     tl.atomic_add(dw_ptr + cols, dy * x_hat, mask=mask)
     tl.atomic_add(db_ptr + cols, dy, mask=mask)
 
@@ -152,7 +152,7 @@ class _LayerNormTriton(torch.autograd.Function):
         dy_arg = dy.reshape(-1, N).contiguous()
 
         dx = torch.empty_like(x_arg)
-        # Аккумуляторы для atomic_add обязаны быть обнулены и в fp32.
+        # Аккумуляторы для atomic_add обязаны быть обнулены и в fp32
         dw = torch.zeros(N, device=x_arg.device, dtype=torch.float32)
         db = torch.zeros(N, device=x_arg.device, dtype=torch.float32)
 
@@ -181,7 +181,7 @@ def check_correctness():
     torch.manual_seed(0)
     device = "cuda"
 
-    # fp32 строгая проверка и forward, и backward.
+    # fp32 строгая проверка и forward, и backward
     M, N = 1151, 8192  # неровные размеры специально, чтобы проверить маску
     x = torch.randn(M, N, device=device, dtype=torch.float32, requires_grad=True)
     weight = torch.randn(N, device=device, dtype=torch.float32, requires_grad=True)
